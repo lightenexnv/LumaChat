@@ -1,0 +1,57 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "calls": {
+      "$callId": {
+        ".read": "auth != null && (data.child('callerId').val() == auth.uid || data.child('calleeId').val() == auth.uid)",
+        ".write": "auth != null && ((!data.exists() && newData.exists() && newData.child('callerId').val() == auth.uid) || (data.exists() && !newData.exists() && (data.child('callerId').val() == auth.uid || data.child('calleeId').val() == auth.uid)))",
+        ".validate": "(!data.exists() ? newData.numChildren() >= 6 : newData.numChildren() >= 6) && newData.hasChildren(['callerId', 'calleeId', 'kind', 'callerProfile', 'createdAt', 'state']) && newData.child('callerId').isString() && newData.child('callerId').val() != '' && newData.child('callerId').val().length <= 128 && newData.child('calleeId').isString() && newData.child('calleeId').val() != '' && newData.child('calleeId').val().length <= 128 && newData.child('callerId').val() != newData.child('calleeId').val() && (newData.child('kind').val() == 'voice' || newData.child('kind').val() == 'video') && newData.child('createdAt').isNumber() && newData.child('callerProfile').numChildren() <= 6 && newData.child('callerProfile').hasChildren(['name', 'initials', 'color']) && newData.child('callerProfile').child('name').isString() && newData.child('callerProfile').child('name').val() != '' && newData.child('callerProfile').child('name').val().length <= 100 && newData.child('callerProfile').child('initials').isString() && newData.child('callerProfile').child('initials').val() != '' && newData.child('callerProfile').child('initials').val().length <= 8 && newData.child('callerProfile').child('color').isString() && newData.child('callerProfile').child('color').val() != '' && newData.child('callerProfile').child('color').val().length <= 32 && (!newData.hasChild('endedAt') || newData.child('endedAt').isNumber())",
+        "state": {
+          ".write": "auth != null && ((newData.val() == data.val() && (data.parent().child('callerId').val() == auth.uid || data.parent().child('calleeId').val() == auth.uid)) || (data.parent().child('callerId').val() == auth.uid && newData.val() == 'ended') || (data.parent().child('calleeId').val() == auth.uid && (newData.val() == 'accepted' || newData.val() == 'declined' || newData.val() == 'ended')))",
+          ".validate": "newData.isString() && (newData.val() == 'ringing' || newData.val() == 'accepted' || newData.val() == 'declined' || newData.val() == 'ended') && ((!data.exists() && newData.val() == 'ringing') || (data.exists() && (newData.val() == data.val() || (data.val() == 'ringing' && (newData.val() == 'accepted' || newData.val() == 'declined' || newData.val() == 'ended')) || (data.val() == 'accepted' && newData.val() == 'ended'))))"
+        },
+        "endedAt": {
+          ".write": "auth != null && (data.parent().child('callerId').val() == auth.uid || data.parent().child('calleeId').val() == auth.uid) && (newData.parent().child('state').val() == 'ended' || newData.parent().child('state').val() == 'declined') && newData.isNumber()",
+          ".validate": "newData.isNumber()"
+        },
+        "offer": {
+          ".write": "auth != null && !data.exists() && data.parent().child('callerId').val() == auth.uid",
+          ".validate": "newData.numChildren() == 2 && newData.child('type').val() == 'offer' && newData.child('sdp').isString() && newData.child('sdp').val() != '' && newData.child('sdp').val().length <= 200000"
+        },
+        "answer": {
+          ".write": "auth != null && !data.exists() && data.parent().child('calleeId').val() == auth.uid",
+          ".validate": "newData.numChildren() == 2 && newData.child('type').val() == 'answer' && newData.child('sdp').isString() && newData.child('sdp').val() != '' && newData.child('sdp').val().length <= 200000"
+        },
+        "callerCandidates": {
+          "$candidateId": {
+            ".write": "auth != null && !data.exists() && data.parent().parent().child('callerId').val() == auth.uid",
+              ".validate": "newData.numChildren() <= 4 && newData.hasChild('candidate') && newData.child('candidate').isString() && newData.child('candidate').val().length <= 20000 && (!newData.hasChild('sdpMid') || (newData.child('sdpMid').isString() && newData.child('sdpMid').val().length <= 128)) && (!newData.hasChild('sdpMLineIndex') || newData.child('sdpMLineIndex').isNumber()) && (!newData.hasChild('usernameFragment') || (newData.child('usernameFragment').isString() && newData.child('usernameFragment').val().length <= 128))"
+          }
+        },
+        "calleeCandidates": {
+          "$candidateId": {
+            ".write": "auth != null && !data.exists() && data.parent().parent().child('calleeId').val() == auth.uid",
+              ".validate": "newData.numChildren() <= 4 && newData.hasChild('candidate') && newData.child('candidate').isString() && newData.child('candidate').val().length <= 20000 && (!newData.hasChild('sdpMid') || (newData.child('sdpMid').isString() && newData.child('sdpMid').val().length <= 128)) && (!newData.hasChild('sdpMLineIndex') || newData.child('sdpMLineIndex').isNumber()) && (!newData.hasChild('usernameFragment') || (newData.child('usernameFragment').isString() && newData.child('usernameFragment').val().length <= 128))"
+          }
+        }
+      }
+    },
+    "incomingCalls": {
+      "$calleeId": {
+        ".read": "auth != null && auth.uid == $calleeId",
+        "$callId": {
+          ".write": "auth != null && ((!data.exists() && newData.exists() && auth.uid == newData.child('callerId').val() && newData.child('calleeId').val() == $calleeId) || (data.exists() && !newData.exists() && (auth.uid == $calleeId || data.child('callerId').val() == auth.uid)))",
+          ".validate": "newData.numChildren() >= 7 && newData.numChildren() <= 10 && newData.hasChildren(['callId', 'callerId', 'calleeId', 'kind', 'callerProfile', 'createdAt', 'state']) && newData.child('callId').val() == $callId && newData.child('callerId').isString() && newData.child('callerId').val() != '' && newData.child('callerId').val().length <= 128 && newData.child('calleeId').isString() && newData.child('calleeId').val() == $calleeId && newData.child('calleeId').val().length <= 128 && (newData.child('kind').val() == 'voice' || newData.child('kind').val() == 'video') && newData.child('createdAt').isNumber() && newData.child('state').val() == 'ringing' && newData.child('callerProfile').numChildren() <= 6 && newData.child('callerProfile').hasChildren(['name', 'initials', 'color']) && newData.child('callerProfile').child('name').isString() && newData.child('callerProfile').child('name').val() != '' && newData.child('callerProfile').child('name').val().length <= 100 && newData.child('callerProfile').child('initials').isString() && newData.child('callerProfile').child('initials').val() != '' && newData.child('callerProfile').child('initials').val().length <= 8 && newData.child('callerProfile').child('color').isString() && newData.child('callerProfile').child('color').val() != '' && newData.child('callerProfile').child('color').val().length <= 32"
+        }
+      }
+    },
+    "presence": {
+      "$uid": {
+        ".write": "auth != null && auth.uid == $uid",
+        ".read": "auth != null",
+        ".validate": "newData.numChildren() == 2 && newData.hasChildren(['online', 'lastSeen']) && newData.child('online').isBoolean() && newData.child('lastSeen').isNumber()"
+      }
+    }
+  }
+}

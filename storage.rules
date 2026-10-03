@@ -1,0 +1,45 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function conversationMember(conversationId) {
+      return signedIn()
+        && conversationId is string
+        && conversationId.size() > 0
+        && conversationId.size() <= 256
+        && firestore.exists(/databases/(default)/documents/conversations/$(conversationId))
+        && firestore.get(/databases/(default)/documents/conversations/$(conversationId)).data.memberIds is list
+        && firestore.get(/databases/(default)/documents/conversations/$(conversationId)).data.memberIds.size() == 2
+        && firestore.get(/databases/(default)/documents/conversations/$(conversationId)).data.memberIds.hasAny([request.auth.uid]);
+    }
+
+    function connectedContact(profileUid) {
+      return signedIn()
+        && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid)/contacts/$(profileUid))
+        && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)/contacts/$(profileUid)).data.uid == profileUid;
+    }
+
+    match /conversations/{conversationId}/{messageId}/payload.bin {
+      allow read: if conversationMember(conversationId);
+      allow create, update: if conversationMember(conversationId)
+        && messageId.matches('^[A-Za-z0-9_-]{1,128}$')
+        && request.resource != null
+        && request.resource.size > 0
+        && request.resource.size <= 104857600
+        && request.resource.contentType == 'application/octet-stream';
+      allow delete: if conversationMember(conversationId);
+    }
+
+    match /profiles/{profileUid}/avatar {
+      allow read: if signedIn() && (request.auth.uid == profileUid || connectedContact(profileUid));
+      allow write: if signedIn()
+        && request.auth.uid == profileUid
+        && request.resource.size > 0
+        && request.resource.size <= 10485760
+        && request.resource.contentType.matches('image/.*');
+    }
+  }
+}

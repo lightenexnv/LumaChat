@@ -1,0 +1,287 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    // users/{uid}: owner profile with only bounded display/presence fields.
+    // users/{uid}/contacts/{contactUid}: owner-scoped accepted one-to-one
+    // relationship, conversation ID, pairing secret, and local settings.
+    // invites/{inviteId}: one-time invite state and public invite snapshots.
+    // conversations/{conversationId}: exactly two member UIDs and pin state.
+    // conversations/{conversationId}/messages/{messageId}: encrypted message
+    // ciphertext plus bounded sender, timestamp, status, type, and tombstone
+    // metadata. Attachment bytes are stored in private Firebase Storage.
+    // ===============================================================
+
+    // Profile/contact relationship model:
+    // - users/{uid} stores the owner's display identity and presence metadata.
+    // - users/{uid}/contacts/{contactUid} stores the conversation secret and
+    //   inviteId for an accepted one-to-one relationship.
+    // - A contact may read the connected user's profile only when inviteId
+    //   proves the accepted invite and conversation membership proves the pair.
+    function signedIn() { return request.auth != null; }
+    function isAuthenticated() { return signedIn(); }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+    function uidUnchanged() {
+      return !('uid' in request.resource.data) || request.resource.data.uid == request.auth.uid;
+    }
+    function uidNotModified() {
+      return !('uid' in request.resource.data) || request.resource.data.uid == resource.data.uid;
+    }
+    function isAcceptedInvite(inviteId, firstUid, secondUid) {
+      return inviteId is string
+        && inviteId.size() > 0
+        && inviteId.size() <= 128
+        && exists(/databases/$(database)/documents/invites/$(inviteId))
+        && get(/databases/$(database)/documents/invites/$(inviteId)).data.acceptedBy is string
+        && (
+          (
+            get(/databases/$(database)/documents/invites/$(inviteId)).data.ownerId == firstUid
+            && get(/databases/$(database)/documents/invites/$(inviteId)).data.acceptedBy == secondUid
+          )
+          || (
+            get(/databases/$(database)/documents/invites/$(inviteId)).data.ownerId == secondUid
+            && get(/databases/$(database)/documents/invites/$(inviteId)).data.acceptedBy == firstUid
+          )
+        );
+    }
+    function isConversationPair(conversationId, firstUid, secondUid) {
+      return conversationId is string
+        && conversationId.size() > 0
+        && conversationId.size() <= 256
+        && exists(/databases/$(database)/documents/conversations/$(conversationId))
+        && get(/databases/$(database)/documents/conversations/$(conversationId)).data.memberIds is list
+        && firstUid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.memberIds
+        && secondUid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.memberIds;
+    }
+    function isContactOf(profileUid) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid)/contacts/$(profileUid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)/contacts/$(profileUid)).data.uid == profileUid
+        && isAcceptedInvite(
+          get(/databases/$(database)/documents/users/$(request.auth.uid)/contacts/$(profileUid)).data.inviteId,
+          request.auth.uid,
+          profileUid
+        )
+        && isConversationPair(
+          get(/databases/$(database)/documents/users/$(request.auth.uid)/contacts/$(profileUid)).data.conversationId,
+          request.auth.uid,
+          profileUid
+        );
+    }
+    function isValidContact(ownerUid, contactUid, data) {
+      return data.keys().hasOnly(['uid', 'inviteId', 'name', 'nickname', 'handle', 'initials', 'color', 'photoURL', 'conversationId', 'pairingSecret', 'createdAt', 'pinned', 'clearedAt'])
+        && data.keys().hasAll(['uid', 'name', 'handle', 'initials', 'color', 'conversationId', 'pairingSecret', 'createdAt'])
+        && data.uid == contactUid
+        && data.uid is string && data.uid.size() > 0 && data.uid.size() <= 128
+        && (!('inviteId' in data) || data.inviteId == null || (data.inviteId is string && data.inviteId.size() <= 128))
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 100
+        && (!('nickname' in data) || data.nickname == null || (data.nickname is string && data.nickname.size() <= 100))
+        && data.handle is string && data.handle.size() > 0 && data.handle.size() <= 100
+        && data.initials is string && data.initials.size() > 0 && data.initials.size() <= 8
+        && data.color is string && data.color.size() > 0 && data.color.size() <= 32
+        && (!('photoURL' in data) || data.photoURL == null || (data.photoURL is string && data.photoURL.size() <= 2048))
+        && data.conversationId is string && data.conversationId.size() > 0 && data.conversationId.size() <= 256
+        && data.pairingSecret is string && data.pairingSecret.size() > 0 && data.pairingSecret.size() <= 256
+        && data.createdAt is number
+        && (!('pinned' in data) || data.pinned is bool)
+        && (!('clearedAt' in data) || (data.clearedAt is number && data.clearedAt >= 0))
+        && isConversationPair(data.conversationId, ownerUid, contactUid);
+    }
+    function isValidProfile(profileUid, data) {
+      return data.keys().hasOnly(['uid', 'displayName', 'handle', 'initials', 'color', 'photoURL', 'statusText', 'createdAt', 'lastSeen'])
+        && data.keys().hasAll(['uid', 'displayName', 'handle', 'initials', 'color', 'createdAt'])
+        && data.uid == profileUid
+        && data.displayName is string && data.displayName.size() > 0 && data.displayName.size() <= 100
+        && data.handle is string && data.handle.size() > 0 && data.handle.size() <= 100
+        && data.initials is string && data.initials.size() > 0 && data.initials.size() <= 8
+        && data.color is string && data.color.size() > 0 && data.color.size() <= 32
+        && (!('photoURL' in data) || data.photoURL == null || (data.photoURL is string && data.photoURL.size() <= 2048))
+        && (!('statusText' in data) || data.statusText == null || (data.statusText is string && data.statusText.size() <= 200))
+        && data.createdAt is number
+        && (!('lastSeen' in data) || data.lastSeen is number);
+    }
+    function isValidInviteProfile(data) {
+      return data is map
+        && data.keys().hasOnly(['name', 'handle', 'initials', 'color', 'photoURL'])
+        && data.keys().hasAll(['name', 'handle', 'initials', 'color', 'photoURL'])
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 100
+        && data.handle is string && data.handle.size() > 0 && data.handle.size() <= 100
+        && data.initials is string && data.initials.size() > 0 && data.initials.size() <= 8
+        && data.color is string && data.color.size() > 0 && data.color.size() <= 32
+        && (data.photoURL == null || (data.photoURL is string && data.photoURL.size() <= 2048));
+    }
+    function isValidInvite(data) {
+      return data.keys().hasOnly(['ownerId', 'ownerProfile', 'createdAt', 'expiresAt', 'acceptedBy', 'acceptedProfile'])
+        && data.keys().hasAll(['ownerId', 'ownerProfile', 'createdAt', 'expiresAt', 'acceptedBy', 'acceptedProfile'])
+        && data.ownerId is string && data.ownerId.size() > 0 && data.ownerId.size() <= 128
+        && isValidInviteProfile(data.ownerProfile)
+        && data.createdAt is number && data.expiresAt is number
+        && data.expiresAt > data.createdAt
+        && data.expiresAt - data.createdAt <= 3600000
+        && (data.acceptedBy == null || (data.acceptedBy is string && data.acceptedBy.size() > 0 && data.acceptedBy.size() <= 128))
+        && (data.acceptedProfile == null || isValidInviteProfile(data.acceptedProfile));
+    }
+    function isValidConversationData(data) {
+      return data.keys().hasOnly(['memberIds', 'updatedAt', 'pinnedMessageId', 'pinnedBy', 'pinnedAt'])
+        && data.keys().hasAll(['memberIds', 'updatedAt'])
+        && data.memberIds is list
+        && data.memberIds.size() >= 2
+        && data.memberIds.size() <= 50
+        && data.memberIds[0] is string && data.memberIds[1] is string
+        && data.memberIds[0].size() > 0 && data.memberIds[0].size() <= 128
+        && data.memberIds[1].size() > 0 && data.memberIds[1].size() <= 128
+        && data.updatedAt is number
+        && (!('pinnedMessageId' in data) || data.pinnedMessageId == null || (data.pinnedMessageId is string && data.pinnedMessageId.size() > 0 && data.pinnedMessageId.size() <= 256))
+        && (!('pinnedBy' in data) || data.pinnedBy == null || (data.pinnedBy is string && data.pinnedBy.size() > 0 && data.pinnedBy.size() <= 128))
+        && (!('pinnedAt' in data) || data.pinnedAt == null || data.pinnedAt is timestamp);
+    }
+    function isValidMessageData(data) {
+      return data.keys().hasOnly(['ciphertext', 'senderId', 'createdAt', 'status', 'type', 'edited', 'editedAt', 'deletedForEveryone', 'deletedAt', 'deletedBy', 'deletedFor'])
+        && data.keys().hasAll(['ciphertext', 'senderId', 'createdAt', 'status', 'type'])
+        && data.ciphertext is string && data.ciphertext.size() > 0 && data.ciphertext.size() <= 1000000
+        && data.senderId is string && data.senderId.size() > 0 && data.senderId.size() <= 128
+        && data.createdAt is timestamp
+        && data.status in ['sent', 'delivered', 'read']
+        && data.type in ['text', 'image', 'video', 'audio', 'document', 'location', 'contact', 'call']
+        && (!('edited' in data) || data.edited is bool)
+        && (!('editedAt' in data) || data.editedAt is timestamp)
+        && (!('deletedForEveryone' in data) || data.deletedForEveryone is bool)
+        && (!('deletedAt' in data) || data.deletedAt is timestamp)
+        && (!('deletedBy' in data) || (data.deletedBy is string && data.deletedBy.size() > 0 && data.deletedBy.size() <= 128))
+        && (!('deletedFor' in data) || (data.deletedFor is list
+          && data.deletedFor.size() > 0
+          && data.deletedFor.size() <= 50));
+    }
+    function isConversationMember(conversationId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/conversations/$(conversationId))
+        && request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.memberIds;
+    }
+    function priorDeletedFor(data) {
+      return ('deletedFor' in data && data.deletedFor is list) ? data.deletedFor : [];
+    }
+
+    match /users/{uid} {
+      // Allow authenticated users to read display profiles so live contact names/avatars sync reliably.
+      // Only the profile owner may write/update this document.
+      allow read: if signedIn();
+      allow create: if isOwner(uid) && uidUnchanged() && isValidProfile(uid, request.resource.data);
+      allow update: if isOwner(uid) && uidNotModified() && isValidProfile(uid, request.resource.data);
+      match /contacts/{contactId} {
+        allow read: if isOwner(uid);
+        allow create, update: if isOwner(uid) && isValidContact(uid, contactId, request.resource.data);
+        allow delete: if isOwner(uid);
+      }
+    }
+
+    match /invites/{inviteId} {
+      allow create: if signedIn()
+        && isValidInvite(request.resource.data)
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.acceptedBy == null
+        && request.resource.data.acceptedProfile == null;
+      allow get: if signedIn();
+      allow list: if signedIn() && resource.data.ownerId == request.auth.uid;
+      allow update: if signedIn()
+        && resource.data.acceptedBy == null
+        && resource.data.expiresAt > request.time.toMillis()
+        && request.auth.uid != resource.data.ownerId
+        && isValidInvite(request.resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['acceptedBy', 'acceptedProfile'])
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.ownerProfile == resource.data.ownerProfile
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.expiresAt == resource.data.expiresAt
+        && request.resource.data.acceptedBy == request.auth.uid
+        && isValidInviteProfile(request.resource.data.acceptedProfile);
+      allow delete: if signedIn() && resource.data.ownerId == request.auth.uid;
+    }
+
+    match /conversations/{conversationId} {
+      allow read: if signedIn() && request.auth.uid in resource.data.memberIds;
+      allow create: if signedIn()
+        && isValidConversationData(request.resource.data)
+        && request.auth.uid in request.resource.data.memberIds
+        && request.resource.data.memberIds[0] != request.resource.data.memberIds[1];
+      allow update: if isConversationMember(conversationId)
+        && isValidConversationData(request.resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pinnedMessageId', 'pinnedBy', 'pinnedAt', 'updatedAt'])
+        && request.resource.data.memberIds == resource.data.memberIds
+        && (!('updatedAt' in request.resource.data) || request.resource.data.updatedAt is number)
+        && (!('pinnedMessageId' in request.resource.data) || request.resource.data.pinnedMessageId == null || (request.resource.data.pinnedMessageId is string && request.resource.data.pinnedMessageId.size() > 0 && request.resource.data.pinnedMessageId.size() <= 256))
+        && (!('pinnedBy' in request.resource.data) || request.resource.data.pinnedBy == null || (request.resource.data.pinnedBy is string && request.resource.data.pinnedBy == request.auth.uid))
+        && (!('pinnedAt' in request.resource.data) || request.resource.data.pinnedAt == null || request.resource.data.pinnedAt is timestamp);
+
+      match /messages/{messageId} {
+        // Message schema: ciphertext, senderId, createdAt, status, type.
+        // Delivery acknowledgements may change status only; message content,
+        // ownership, and creation time remain immutable.
+        allow read: if isConversationMember(conversationId);
+        allow create: if signedIn()
+          && request.auth.uid == request.resource.data.senderId
+          && isConversationMember(conversationId)
+          && isValidMessageData(request.resource.data)
+          && request.resource.data.status == 'sent';
+        allow update: if isConversationMember(conversationId)
+          && isValidMessageData(request.resource.data)
+          && (
+            // 1. Recipient status acknowledgement
+            (
+              resource.data.senderId != request.auth.uid
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+              && (
+                (resource.data.status == 'sent' && request.resource.data.status == 'delivered')
+                || (resource.data.status == 'delivered' && request.resource.data.status == 'read')
+              )
+            )
+            ||
+            // 2. Sender editing own message
+            (
+              resource.data.senderId == request.auth.uid
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ciphertext', 'edited', 'editedAt'])
+              && request.resource.data.senderId == resource.data.senderId
+              && request.resource.data.createdAt == resource.data.createdAt
+              && request.resource.data.type == resource.data.type
+              && request.resource.data.ciphertext is string
+              && request.resource.data.ciphertext.size() > 0
+              && request.resource.data.ciphertext.size() <= 1000000
+              && request.resource.data.edited == true
+              && request.resource.data.editedAt is timestamp
+            )
+            ||
+            // 3. Sender delete for everyone
+            (
+              resource.data.senderId == request.auth.uid
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ciphertext', 'deletedForEveryone', 'deletedAt', 'deletedBy', 'status'])
+              && request.resource.data.senderId == resource.data.senderId
+              && request.resource.data.createdAt == resource.data.createdAt
+              && request.resource.data.type == resource.data.type
+              && request.resource.data.deletedForEveryone == true
+              && request.resource.data.deletedAt is timestamp
+              && request.resource.data.deletedBy == request.auth.uid
+              && request.resource.data.ciphertext is string
+            )
+            ||
+            // 4. Conversation member delete for me
+            (
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['deletedFor'])
+              && request.resource.data.deletedFor is list
+              && request.resource.data.deletedFor.size() > 0
+              && request.resource.data.deletedFor.size() <= 50
+              && request.auth.uid in request.resource.data.deletedFor
+              && (
+                !('deletedFor' in resource.data)
+                  ? request.resource.data.deletedFor.size() == 1
+                  : request.resource.data.deletedFor.size() == resource.data.deletedFor.size() + 1
+                    && request.resource.data.deletedFor.hasAll(resource.data.deletedFor)
+              )
+              && request.resource.data.deletedFor.hasOnly(priorDeletedFor(resource.data).concat([request.auth.uid]))
+            )
+          );
+        allow delete: if signedIn() && request.auth.uid == resource.data.senderId;
+      }
+    }
+  }
+}

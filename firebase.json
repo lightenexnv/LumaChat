@@ -1,0 +1,17 @@
+{
+  "hosting": {
+    "public": "dist",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [{ "source": "**", "destination": "/index.html" }]
+  },
+  "firestore": { "rules": "firestore.rules" },
+  "database": { "rules": "database.rules.json" },
+  "storage": { "rules": "storage.rules" }
+  ,"auth": {
+    "authorizedDomains": ["localhost", "luma-1d1cf.web.app", "luma-1d1cf.firebaseapp.com", "luma-delta-navy.vercel.app"],
+    "providers": {
+      "emailPassword": true,
+      "googleSignIn": { "oAuthBrandDisplayName": "Luma", "supportEmail": "svak3456@gmail.com" }
+    }
+  }
+}
