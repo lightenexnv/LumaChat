@@ -1,7 +1,7 @@
 {
   "id": "lumachat-pwa",
-  "name": "Luma",
-  "short_name": "Luma",
+  "name": "LumaChat",
+  "short_name": "LumaChat",
   "description": "Private, end-to-end encrypted messaging and calling.",
   "start_url": "/",
   "scope": "/",

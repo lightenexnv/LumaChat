@@ -17,14 +17,32 @@ jobs:
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_15.4.app || sudo xcode-select -s /Applications/Xcode.app
 
-      - name: Package iOS IPA
+      - name: Build and Archive Luma iOS App
         run: |
-          chmod +x ios/package_ipa.sh
-          ./ios/package_ipa.sh
+          xcodebuild archive \
+            -project ios/Luma.xcodeproj \
+            -scheme Luma \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath ios/build/Luma.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            COMPILER_INDEX_STORE_ENABLE=NO
 
-      - name: Upload IPA Artifact
+      - name: Package Real IPA with Compiled Mach-O Binary
+        run: |
+          mkdir -p ios/Payload
+          cp -R ios/build/Luma.xcarchive/Products/Applications/Luma.app ios/Payload/
+          cd ios
+          zip -qr Luma.ipa Payload
+          rm -rf Payload
+          echo "=== Real Compiled IPA Size ==="
+          ls -lh Luma.ipa
+
+      - name: Upload Real IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Luma-iOS-IPA
+          name: LumaChat-iOS-IPA
           path: ios/Luma.ipa
           retention-days: 14
