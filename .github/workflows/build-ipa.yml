@@ -1,0 +1,30 @@
+name: iOS Build & Package IPA
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build-ipa:
+    runs-on: macos-14
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app || sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Package iOS IPA
+        run: |
+          chmod +x ios/package_ipa.sh
+          ./ios/package_ipa.sh
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Luma-iOS-IPA
+          path: ios/Luma.ipa
+          retention-days: 14

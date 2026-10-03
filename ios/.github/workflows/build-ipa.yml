@@ -1,0 +1,44 @@
+name: Build Luma IPA
+
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  build:
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: List Xcode schemes
+        run: |
+          xcodebuild -list \
+            -project ios/Luma.xcodeproj
+
+      - name: Build Archive
+        run: |
+          xcodebuild archive \
+            -project ios/Luma.xcodeproj \
+            -scheme Luma \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath build/Luma.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+      - name: Package IPA
+        run: |
+          mkdir -p Payload
+          cp -R build/Luma.xcarchive/Products/Applications/Luma.app Payload/
+          zip -r Luma.ipa Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Luma-IPA
+          path: Luma.ipa
