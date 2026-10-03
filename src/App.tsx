@@ -26,39 +26,27 @@ import GatewayScreen from './GatewayScreen'
 import { clearGatewayVerification } from './lib/gateway'
 import './styles.css'
 
-export async function downloadAttachment(url: string, fileName: string) {
-  try {
-    const res = await fetch(url)
-    const blob = await res.blob()
-    const objectUrl = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = objectUrl
-    a.download = fileName || 'download.jpg'
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    setTimeout(() => URL.revokeObjectURL(objectUrl), 1500)
-  } catch {
-    const a = document.createElement('a')
-    a.href = url
-    a.download = fileName || 'download.jpg'
-    a.target = '_blank'
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-  }
-}
+import {
+  downloadAttachment,
+  downloadAllAttachments,
+  formatTime,
+  formatLastSeen,
+  formatChatRowTimestamp,
+  formatDuration,
+  formatCallDuration,
+  formatMediaTime,
+  formatMessageDayHeader,
+  getDisplayName,
+  getFriendAvatarUrl,
+  readMediaDimensions,
+} from './lib/formatters'
 
-export async function downloadAllAttachments(attachments: NonNullable<ChatMessage['attachment']>[]) {
-  for (let i = 0; i < attachments.length; i++) {
-    const att = attachments[i]
-    if (att.url) {
-      await downloadAttachment(att.url, att.fileName || `photo_${i + 1}.jpg`)
-      if (i < attachments.length - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 300))
-      }
-    }
-  }
+export {
+  downloadAttachment,
+  downloadAllAttachments,
+  formatChatRowTimestamp,
+  getDisplayName,
+  getFriendAvatarUrl,
 }
 
 type View = 'home' | 'calls' | 'settings'
@@ -71,112 +59,10 @@ type MediaRetryJob = { file: File; forcedKind?: MediaKind; durationSeconds?: num
 
 const qualityLabel: Record<QualityMode, string> = { auto: 'Auto', '1080p': 'Full HD', '720p': 'HD', '480p': 'Standard', '360p': 'Low', '240p': 'Data saver', audio: 'Audio only' }
 const qualityModes: QualityMode[] = ['auto', '1080p', '720p', '480p', '360p', '240p', 'audio']
-const formatTime = (timestamp: number) => new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(timestamp)
-const formatLastSeen = (timestamp?: number) => {
-  if (!timestamp || !Number.isFinite(timestamp)) return 'Last seen recently'
-  const elapsed = Math.max(0, Date.now() - timestamp)
-  if (elapsed < 60_000) return 'Last seen just now'
-  if (elapsed < 3_600_000) return `Last seen ${Math.floor(elapsed / 60_000)} min ago`
-  return `Last seen ${new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(timestamp)}`
-}
-export function formatChatRowTimestamp(timestamp?: number): string {
-  if (!timestamp || !Number.isFinite(timestamp)) return ''
-  const now = Date.now()
-  const diff = Math.max(0, now - timestamp)
-  const oneHour = 3600_000
-  const oneDay = 86400_000
-  const oneWeek = 7 * oneDay
-
-  const msgDate = new Date(timestamp)
-  const nowDate = new Date(now)
-
-  const isToday = msgDate.toDateString() === nowDate.toDateString()
-  const isYesterday = new Date(now - oneDay).toDateString() === msgDate.toDateString()
-
-  // If within 24 hours / today: show hours (e.g. "2h ago" or "Just now" or "15m ago")
-  if (isToday || diff < oneDay) {
-    const hours = Math.floor(diff / oneHour)
-    if (hours < 1) {
-      const mins = Math.floor(diff / 60_000)
-      return mins <= 1 ? 'Just now' : `${mins}m ago`
-    }
-    return `${hours}h ago`
-  }
-
-  // If yesterday
-  if (isYesterday || diff < 2 * oneDay) {
-    return 'Yesterday'
-  }
-
-  // If more than yesterday but less than a week: show weekday name (e.g. Thursday, Friday)
-  if (diff < oneWeek) {
-    return new Intl.DateTimeFormat('en-US', { weekday: 'long' }).format(msgDate)
-  }
-
-  // If more than a week: show date in DD/MM/YYYY
-  const day = String(msgDate.getDate()).padStart(2, '0')
-  const month = String(msgDate.getMonth() + 1).padStart(2, '0')
-  const year = msgDate.getFullYear()
-  return `${day}/${month}/${year}`
-}
-const formatDuration = (startedAt: number) => { const seconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000)); return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}` }
-const formatCallDuration = (seconds: number) => `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
 const messageId = (prefix: string) => `${prefix}-${globalThis.crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`
-
-function formatMessageDayHeader(timestamp: number): string {
-  const date = new Date(timestamp)
-  const now = new Date()
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  const msgDate = new Date(date.getFullYear(), date.getMonth(), date.getDate())
-  const diffDays = Math.round((today.getTime() - msgDate.getTime()) / (1000 * 60 * 60 * 24))
-  if (diffDays === 0) return 'Today'
-  if (diffDays === 1) return 'Yesterday'
-  if (diffDays < 7 && diffDays > 1) return date.toLocaleDateString(undefined, { weekday: 'long' })
-  return date.toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined })
-}
-
-async function readMediaDimensions(file: File, kind: MessageKind) {
-  if (kind !== 'image' && kind !== 'video') return {}
-  const previewUrl = URL.createObjectURL(file)
-  try {
-    if (kind === 'image') {
-      const image = new Image()
-      const dimensions = await new Promise<{ width: number; height: number }>((resolve, reject) => {
-        image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight })
-        image.onerror = () => reject(new Error('The image dimensions could not be read.'))
-        image.src = previewUrl
-      })
-      return dimensions
-    }
-    const video = document.createElement('video')
-    const dimensions = await new Promise<{ width: number; height: number }>((resolve, reject) => {
-      video.onloadedmetadata = () => resolve({ width: video.videoWidth, height: video.videoHeight })
-      video.onerror = () => reject(new Error('The video dimensions could not be read.'))
-      video.preload = 'metadata'
-      video.src = previewUrl
-    })
-    return dimensions
-  } catch {
-    return {}
-  } finally {
-    URL.revokeObjectURL(previewUrl)
-  }
-}
 
 function LumaMark({ size = 'normal' }: { size?: 'small' | 'normal' | 'large' }) {
   return <div className={`stitch-luma-mark stitch-luma-mark-${size}`} aria-hidden="true"><MessageCircle /><span><i /><i /><i /></span></div>
-}
-
-export function getDisplayName(friend?: { name: string; nickname?: string } | null): string {
-  if (!friend) return ''
-  return friend.nickname?.trim() || friend.name
-}
-
-export function getFriendAvatarUrl(friend?: { name?: string; photoURL?: string } | null): string | undefined {
-  if (!friend) return undefined
-  if (friend.photoURL) return friend.photoURL
-  if (friend.name && friend.name.toLowerCase().includes('gunnu')) return '/avatars/gunnu_verma.png'
-  return undefined
 }
 
 function Avatar({ friend, size = 'normal' }: { friend: Pick<Friend, 'initials' | 'color'> & { photoURL?: string; name?: string; nickname?: string }; size?: 'small' | 'normal' | 'large' }) {
@@ -3748,11 +3634,6 @@ function AttachmentViewer({
       </section>
     </div>
   )
-}
-
-function formatMediaTime(seconds: number) {
-  if (!Number.isFinite(seconds) || seconds <= 0) return '00:00'
-  return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`
 }
 
 function VoiceComposer({ onSend, onError, onActiveChange, disabled = false }: { onSend: (blob: Blob, durationSeconds: number) => void; onError: (message: string) => void; onActiveChange?: (active: boolean) => void; disabled?: boolean }) {

@@ -2,6 +2,96 @@ import Foundation
 import Combine
 import AVFoundation
 
+#if canImport(WebRTC)
+import WebRTC
+
+final class NativeRTCClient: NSObject, RTCPeerConnectionDelegate {
+    private let factory: RTCPeerConnectionFactory
+    private var peerConnection: RTCPeerConnection?
+    private var localAudioTrack: RTCAudioTrack?
+    private var localVideoTrack: RTCVideoTrack?
+    var onIceCandidate: ((RTCIceCandidate) -> Void)?
+    
+    override init() {
+        RTCInitializeSSL()
+        let videoEncoderFactory = RTCDefaultVideoEncoderFactory()
+        let videoDecoderFactory = RTCDefaultVideoDecoderFactory()
+        self.factory = RTCPeerConnectionFactory(encoderFactory: videoEncoderFactory, decoderFactory: videoDecoderFactory)
+        super.init()
+    }
+    
+    func createPeerConnection(iceServers: [String] = ["stun:stun.l.google.com:19302"]) -> RTCPeerConnection? {
+        let config = RTCConfiguration()
+        config.iceServers = [RTCIceServer(urlStrings: iceServers)]
+        config.sdpSemantics = .unifiedPlan
+        config.continualGatheringPolicy = .gatherContinually
+        let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: ["DtlsSrtpKeyAgreement": "true"])
+        let pc = factory.peerConnection(with: config, constraints: constraints, delegate: self)
+        self.peerConnection = pc
+        return pc
+    }
+    
+    func setupMediaTracks(isVideo: Bool) {
+        let audioConst = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
+        let audioSource = factory.audioSource(with: audioConst)
+        let audioTrack = factory.audioTrack(with: audioSource, trackId: "audio0")
+        self.localAudioTrack = audioTrack
+        peerConnection?.add(audioTrack, streamIds: ["stream0"])
+        
+        if isVideo {
+            let videoSource = factory.videoSource()
+            let videoTrack = factory.videoTrack(with: videoSource, trackId: "video0")
+            self.localVideoTrack = videoTrack
+            peerConnection?.add(videoTrack, streamIds: ["stream0"])
+        }
+    }
+    
+    func createOffer(completion: @escaping (String?) -> Void) {
+        let constraints = RTCMediaConstraints(mandatoryConstraints: ["OfferToReceiveAudio": "true", "OfferToReceiveVideo": "true"], optionalConstraints: nil)
+        peerConnection?.offer(for: constraints) { [weak self] sdp, _ in
+            guard let sdp = sdp else { completion(nil); return }
+            self?.peerConnection?.setLocalDescription(sdp) { _ in
+                completion(sdp.sdp)
+            }
+        }
+    }
+    
+    func createAnswer(remoteSdp: String, completion: @escaping (String?) -> Void) {
+        let remoteDesc = RTCSessionDescription(type: .offer, sdp: remoteSdp)
+        peerConnection?.setRemoteDescription(remoteDesc) { [weak self] _ in
+            let constraints = RTCMediaConstraints(mandatoryConstraints: ["OfferToReceiveAudio": "true", "OfferToReceiveVideo": "true"], optionalConstraints: nil)
+            self?.peerConnection?.answer(for: constraints) { sdp, _ in
+                guard let sdp = sdp else { completion(nil); return }
+                self?.peerConnection?.setLocalDescription(sdp) { _ in
+                    completion(sdp.sdp)
+                }
+            }
+        }
+    }
+    
+    func addIceCandidate(_ candidate: RTCIceCandidate) {
+        peerConnection?.add(candidate)
+    }
+    
+    func close() {
+        peerConnection?.close()
+        peerConnection = nil
+    }
+    
+    // RTCPeerConnectionDelegate
+    func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
+        onIceCandidate?(candidate)
+    }
+    func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {}
+    func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {}
+    func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {}
+    func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {}
+    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {}
+    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {}
+    func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
+}
+#endif
+
 public enum CallQualityProfile: String, CaseIterable {
     case high = "1080p (Wi-Fi / 5G)"
     case balanced = "720p (4G / Strong LTE)"
