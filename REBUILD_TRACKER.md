@@ -5,19 +5,19 @@ Tracking execution of [LUMA_REBUILD_MASTER_PROMPT.md](file:///d:/Coding/LumaChat
 ## Phase Checklist
 
 ### Phase 0: Foundations, Protocol & Shared Contracts
-- [ ] Unified data contracts across TypeScript, Swift, Kotlin (`data-model.md`)
-- [ ] Universal PBKDF2 (120,000 iterations) + AES-GCM (256-bit) E2EE engine & test vectors
-- [ ] Cross-platform cryptographic test vector verification
-- [ ] Firebase Security Rules audit and sync (`firestore.rules`, `database.rules.json`, `storage.rules`, `firebase.json`)
-- [ ] **Phase 0 Completion Gate**: Cryptographic test suite passes, zero lint/type errors.
+- [x] Unified data contracts across TypeScript, Swift, Kotlin (`data-model.md`)
+- [x] Universal PBKDF2 (120,000 iterations) + AES-GCM (256-bit) E2EE engine & test vectors
+- [x] Cross-platform cryptographic test vector verification (passed in Vitest & Node Web Crypto)
+- [x] Firebase Security Rules audit and sync (`firestore.rules`, `database.rules.json`, `storage.rules`, `firebase.json`)
+- [x] **Phase 0 Completion Gate**: Cryptographic test suite passes (44/44 tests green), zero lint/type errors (`tsc -b` passed).
 
 ### Phase 1: Authentication, Presence & Contact Pairing
-- [ ] Google Sign-In & Email/Password with token auto-refresh
-- [ ] User Profile setup & management
-- [ ] Realtime Database presence engine (`.info/connected`, `onDisconnect`)
-- [ ] QR code generator/scanner (HTML5-QRCode) & 6-char pairing invite engine
-- [ ] 100% Authentic Fake YouTube reCAPTCHA Gateway Screen (`GatewayScreen.tsx` / `gateway.ts`) with passphrase `gune`
-- [ ] **Phase 1 Completion Gate**: Gateway verified, contact pairing verified, presence active.
+- [x] Google Sign-In & Email/Password with token auto-refresh
+- [x] User Profile setup & management
+- [x] Realtime Database presence engine (`.info/connected`, `onDisconnect`)
+- [x] QR code generator/scanner (HTML5-QRCode) & 6-char pairing invite engine
+- [x] 100% Authentic Fake YouTube reCAPTCHA Gateway Screen (`GatewayScreen.tsx` / `gateway.ts` & Swift `GatewayView`) with passphrase `gune`
+- [x] **Phase 1 Completion Gate**: Gateway verified, contact pairing verified, presence active.
 
 ### Phase 2: End-to-End Encrypted 1:1 Chat Engine
 - [ ] Modular Chat UI (Message List, Input Bar, Pinned Message Banner)
