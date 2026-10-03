@@ -5,7 +5,7 @@ import { GoogleAccountLinkRequiredError, PendingGoogleEmailMismatchError, authEr
 import { clearGatewayVerification, createGatewayChallenge, GATEWAY_SESSION_KEY, hasGatewayVerification, isGatewayAnswerCorrect, markGatewayVerified, normalizeGatewayAnswer } from './gateway'
 import { mergeContactProfile } from './profiles'
 import { getMediaGridConfig, groupDisplayMessages } from './media-groups'
-import { canTransitionCallState, classifyNetwork, optimizeSdp, QUALITY_PROFILES, WebRTCCall } from './webrtc'
+import { canTransitionCallState, classifyNetwork, ensureCompliantSdp, optimizeSdp, QUALITY_PROFILES, WebRTCCall } from './webrtc'
 import { AudioBooster } from './audio-booster'
 import type { ChatMessage } from '../types'
 
@@ -588,6 +588,49 @@ describe('Call Stability and Network Classification Enhancements', () => {
 
   it('defines adaptEncoding on WebRTCCall prototype', () => {
     expect(typeof WebRTCCall.prototype.adaptEncoding).toBe('function')
+  })
+
+  it('guarantees RFC-compliant DTLS fingerprint and ICE credentials on bare cross-platform SDP', () => {
+    const rawCrossPlatformSdp = [
+      'v=0',
+      'o=- 1740000000 2 IN IP4 127.0.0.1',
+      's=-',
+      't=0 0',
+      'm=audio 9 UDP/TLS/RTP/SAVPF 111',
+      'a=rtpmap:111 opus/48000/2',
+      'm=video 9 UDP/TLS/RTP/SAVPF 96',
+      'a=rtpmap:96 H264/90000',
+    ].join('\r\n')
+
+    const compliant = ensureCompliantSdp(rawCrossPlatformSdp, true)
+    expect(compliant).toContain('a=fingerprint:sha-256')
+    expect(compliant).toContain('a=ice-ufrag:')
+    expect(compliant).toContain('a=ice-pwd:')
+    expect(compliant).toContain('a=ice-options:trickle')
+    expect(compliant).toContain('a=setup:active')
+    expect(compliant).toContain('a=candidate:')
+    expect(compliant).toContain('a=end-of-candidates')
+  })
+
+  it('preserves existing DTLS fingerprint and does not duplicate credentials', () => {
+    const sdpWithFingerprint = [
+      'v=0',
+      'o=- 123 2 IN IP4 127.0.0.1',
+      's=-',
+      't=0 0',
+      'a=fingerprint:sha-256 AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99',
+      'a=ice-ufrag:customUfrag',
+      'a=ice-pwd:customPwd12345',
+      'm=audio 9 UDP/TLS/RTP/SAVPF 111',
+      'a=rtpmap:111 opus/48000/2',
+      'a=setup:actpass',
+    ].join('\r\n')
+
+    const result = ensureCompliantSdp(sdpWithFingerprint, false)
+    expect(result).toContain('a=fingerprint:sha-256 AA:BB:CC:DD:EE:FF')
+    expect(result.match(/a=fingerprint:/g)?.length).toBe(1)
+    expect(result).toContain('a=ice-ufrag:customUfrag')
+    expect(result.match(/a=ice-ufrag:/g)?.length).toBe(1)
   })
 })
 

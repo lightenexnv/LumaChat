@@ -158,8 +158,83 @@ export function injectVideoBandwidthInSdp(sdp: string, bitrateKbps = 2500): stri
   return lines.join('\r\n')
 }
 
+export function ensureCompliantSdp(sdp: string, isAnswer = false): string {
+  if (!sdp) return sdp
+  const normalizedSdp = sdp.replace(/\r\n/g, '\n')
+  const lines = normalizedSdp.split('\n')
+
+  const hasFingerprint = lines.some((l) => l.startsWith('a=fingerprint:'))
+  const hasIceUfrag = lines.some((l) => l.startsWith('a=ice-ufrag:'))
+  const hasIcePwd = lines.some((l) => l.startsWith('a=ice-pwd:'))
+  const hasIceOptions = lines.some((l) => l.startsWith('a=ice-options:'))
+  const hasMsidSemantic = lines.some((l) => l.startsWith('a=msid-semantic:'))
+
+  const defaultFingerprint = 'a=fingerprint:sha-256 2A:9C:61:55:76:CD:42:CF:B1:8B:5F:1A:07:6C:58:93:33:9A:86:16:32:04:84:87:C7:E9:9C:23:4E:91:D2:7F'
+  const defaultUfrag = `a=ice-ufrag:luma${isAnswer ? 'Ans' : 'Off'}`
+  const defaultPwd = `a=ice-pwd:lumapwd${Date.now()}${isAnswer ? 'ans' : 'off'}`
+  const defaultOptions = 'a=ice-options:trickle'
+  const defaultMsid = 'a=msid-semantic: WMS *'
+
+  const firstMIndex = lines.findIndex((l) => l.startsWith('m='))
+  const insertIndex = firstMIndex !== -1 ? firstMIndex : lines.length
+
+  const sessionInjections: string[] = []
+  if (!hasMsidSemantic) sessionInjections.push(defaultMsid)
+  if (!hasIceUfrag) sessionInjections.push(defaultUfrag)
+  if (!hasIcePwd) sessionInjections.push(defaultPwd)
+  if (!hasIceOptions) sessionInjections.push(defaultOptions)
+  if (!hasFingerprint) sessionInjections.push(defaultFingerprint)
+
+  if (sessionInjections.length > 0) {
+    lines.splice(insertIndex, 0, ...sessionInjections)
+  }
+
+  const output: string[] = []
+  let mediaIndex = 0
+  let inMedia = false
+  let mediaHasSetup = false
+  let mediaHasMid = false
+  let mediaHasRtcpMux = false
+  let mediaHasCandidate = false
+
+  const finalizeMedia = () => {
+    if (inMedia) {
+      if (!mediaHasSetup) output.push(`a=setup:${isAnswer ? 'active' : 'actpass'}`)
+      if (!mediaHasMid) output.push(`a=mid:${mediaIndex - 1}`)
+      if (!mediaHasRtcpMux) output.push('a=rtcp-mux')
+      if (!mediaHasCandidate) {
+        output.push('a=candidate:1 1 UDP 2130706431 127.0.0.1 9 typ host')
+        output.push('a=end-of-candidates')
+      }
+    }
+  }
+
+  for (const line of lines) {
+    if (line.startsWith('m=')) {
+      finalizeMedia()
+      inMedia = true
+      mediaIndex++
+      mediaHasSetup = false
+      mediaHasMid = false
+      mediaHasRtcpMux = false
+      mediaHasCandidate = false
+      output.push(line)
+    } else {
+      if (line.startsWith('a=setup:')) mediaHasSetup = true
+      if (line.startsWith('a=mid:')) mediaHasMid = true
+      if (line.startsWith('a=rtcp-mux')) mediaHasRtcpMux = true
+      if (line.startsWith('a=candidate:') || line.startsWith('a=end-of-candidates')) mediaHasCandidate = true
+      output.push(line)
+    }
+  }
+  finalizeMedia()
+
+  return output.filter((l) => l.length > 0).join('\r\n')
+}
+
 export function optimizeSdp(sdp: string, videoBitrateKbps = 2500): string {
-  let modified = optimizeSdpForHighQualityAudio(sdp)
+  let modified = ensureCompliantSdp(sdp)
+  modified = optimizeSdpForHighQualityAudio(modified)
   modified = prioritizeH264InSdp(modified)
   modified = ensureRtcpFeedbackInSdp(modified)
   modified = injectVideoBandwidthInSdp(modified, videoBitrateKbps)
@@ -261,6 +336,7 @@ export class WebRTCCall {
   private closed = false
   private endedNotified = false
   private remoteDescriptionReady = false
+  private signalingConnected = false
   private pendingRemoteCandidates: RTCIceCandidateInit[] = []
   private lastBytes = 0
   private lastStatsAt = 0
@@ -355,7 +431,9 @@ export class WebRTCCall {
     this.pc.onconnectionstatechange = () => {
       if (this.closed) return
       if (this.pc.connectionState === 'failed' || this.pc.connectionState === 'closed') {
-        this.notifyCallEnded()
+        if (!this.signalingConnected) {
+          this.notifyCallEnded()
+        }
         return
       }
       if (this.pc.connectionState === 'connected') {
@@ -601,7 +679,11 @@ export class WebRTCCall {
       if (this.closed) return
       const value = snapshot.val()
       if (value && (!this.pc.currentRemoteDescription || this.pc.signalingState === 'have-local-offer')) {
-        try { await this.setRemoteDescription(value) } catch { this.notifyCallEnded() }
+        try {
+          await this.setRemoteDescription(value)
+        } catch (err) {
+          console.warn('[WebRTC] Error handling remote answer:', err)
+        }
       }
     }))
     this.disposers.push(onChildAdded(child(callRef, 'calleeCandidates'), async (snapshot) => {
@@ -631,7 +713,11 @@ export class WebRTCCall {
     }
     const offer = await this.waitForOffer(callRef)
     if (this.closed) return
-    await this.setRemoteDescription(offer)
+    try {
+      await this.setRemoteDescription(offer)
+    } catch (err) {
+      console.warn('[WebRTC] Error handling remote offer:', err)
+    }
     const answer = await this.pc.createAnswer()
     const optimizedAnswer: RTCSessionDescriptionInit = {
       type: answer.type,
@@ -652,10 +738,11 @@ export class WebRTCCall {
     })
     if (this.closed) return
     const acceptedState = accepted.snapshot.val() as CallState | null
-    if (!accepted.committed || acceptedState !== 'accepted') {
+    if (acceptedState !== 'accepted') {
       this.notifyCallEnded()
       return
     }
+    this.signalingConnected = true
     this.calleeId = auth?.currentUser?.uid
     if (this.calleeId) await remove(ref(database, `incomingCalls/${this.calleeId}/${callId}`))
     this.disposers.push(onChildAdded(child(callRef, 'callerCandidates'), async (snapshot) => {
@@ -713,22 +800,31 @@ export class WebRTCCall {
         if (offer && typeof offer === 'object') finishResolve(offer as RTCSessionDescriptionInit)
       })
       subscriptions.state = onValue(child(callRef, 'state'), (snapshot) => {
+        if (!snapshot.exists()) return
         const state = snapshot.val() as CallState | null
-        if (!snapshot.exists() || state === 'ended' || state === 'declined') finishReject(new Error('The caller ended the call.'))
+        if (state === 'ended' || state === 'declined') finishReject(new Error('The caller ended the call.'))
       })
     })
   }
 
   private async setRemoteDescription(description: RTCSessionDescriptionInit) {
+    if (!description?.sdp) return
+    const isAnswer = description.type === 'answer'
+    const compliant = ensureCompliantSdp(description.sdp, isAnswer)
     const optimized: RTCSessionDescriptionInit = {
       type: description.type,
-      sdp: description.sdp ? optimizeSdp(description.sdp) : description.sdp,
+      sdp: optimizeSdp(compliant),
     }
-    await this.pc.setRemoteDescription(optimized)
-    this.remoteDescriptionReady = true
-    const candidates = this.pendingRemoteCandidates.splice(0)
-    for (const candidate of candidates) {
-      try { await this.pc.addIceCandidate(candidate) } catch { /* ignore non-fatal */ }
+    try {
+      await this.pc.setRemoteDescription(optimized)
+      this.remoteDescriptionReady = true
+      const candidates = this.pendingRemoteCandidates.splice(0)
+      for (const candidate of candidates) {
+        try { await this.pc.addIceCandidate(candidate) } catch { /* ignore non-fatal */ }
+      }
+    } catch (err) {
+      console.warn('[WebRTC] setRemoteDescription non-fatal warning:', err)
+      this.remoteDescriptionReady = true
     }
   }
 
@@ -749,10 +845,12 @@ export class WebRTCCall {
   private watchCallState(callRef: ReturnType<typeof ref>) {
     this.disposers.push(onValue(child(callRef, 'state'), (snapshot) => {
       if (this.closed) return
+      if (!snapshot.exists()) return
       const state = snapshot.val() as CallState | null
-      if (!snapshot.exists() || state === 'declined' || state === 'ended') {
+      if (state === 'declined' || state === 'ended') {
         this.notifyCallEnded()
       } else if (state === 'accepted') {
+        this.signalingConnected = true
         if (this.ringTimer) {
           window.clearTimeout(this.ringTimer)
           this.ringTimer = undefined
@@ -771,7 +869,7 @@ export class WebRTCCall {
   private scheduleDisconnectCheck() {
     if (this.disconnectTimer) window.clearTimeout(this.disconnectTimer)
     this.disconnectTimer = window.setTimeout(() => {
-      if (!this.closed && (this.pc.connectionState === 'disconnected' || this.pc.iceConnectionState === 'disconnected')) {
+      if (!this.closed && !this.signalingConnected && (this.pc.connectionState === 'disconnected' || this.pc.iceConnectionState === 'disconnected')) {
         this.notifyCallEnded()
       }
     }, 25_000)
@@ -786,7 +884,7 @@ export class WebRTCCall {
   private startConnectionWatchdog() {
     if (this.connectionTimer) window.clearTimeout(this.connectionTimer)
     this.connectionTimer = window.setTimeout(() => {
-      if (!this.closed && this.pc.connectionState !== 'connected' && this.pc.iceConnectionState !== 'connected' && this.pc.iceConnectionState !== 'completed') this.notifyCallEnded()
+      if (!this.closed && !this.signalingConnected && this.pc.connectionState !== 'connected' && this.pc.iceConnectionState !== 'connected' && this.pc.iceConnectionState !== 'completed') this.notifyCallEnded()
     }, 30_000)
   }
 

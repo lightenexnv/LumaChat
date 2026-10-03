@@ -240,16 +240,7 @@ public final class WebRTCService: ObservableObject {
             _ = try? await URLSession.shared.data(for: req)
         }
         
-        // 2. Write /incomingCalls/{calleeId}/{callId}.json?auth=\(token)
-        if let incUrl = URL(string: "\(auth.databaseURL)/incomingCalls/\(calleeId)/\(callId).json?auth=\(token)") {
-            var req = URLRequest(url: incUrl)
-            req.httpMethod = "PUT"
-            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = try? JSONSerialization.data(withJSONObject: incomingPayload)
-            _ = try? await URLSession.shared.data(for: req)
-        }
-        
-        // 3. Write /calls/{callId}/offer.json?auth=\(token)
+        // 2. Write /calls/{callId}/offer.json?auth=\(token)
         let offerPayload: [String: Any] = [
             "type": "offer",
             "sdp": Self.generateStandardSdp(isVideo: isVideo, isAnswer: false)
@@ -259,6 +250,29 @@ public final class WebRTCService: ObservableObject {
             req.httpMethod = "PUT"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = try? JSONSerialization.data(withJSONObject: offerPayload)
+            _ = try? await URLSession.shared.data(for: req)
+        }
+
+        // 3. Write /calls/{callId}/callerCandidates.json?auth=\(token)
+        let candidatePayload: [String: Any] = [
+            "candidate": "candidate:1 1 UDP 2130706431 127.0.0.1 9 typ host",
+            "sdpMid": "0",
+            "sdpMLineIndex": 0
+        ]
+        if let candUrl = URL(string: "\(auth.databaseURL)/calls/\(callId)/callerCandidates.json?auth=\(token)") {
+            var candReq = URLRequest(url: candUrl)
+            candReq.httpMethod = "POST"
+            candReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            candReq.httpBody = try? JSONSerialization.data(withJSONObject: candidatePayload)
+            _ = try? await URLSession.shared.data(for: candReq)
+        }
+        
+        // 4. Write /incomingCalls/{calleeId}/{callId}.json?auth=\(token)
+        if let incUrl = URL(string: "\(auth.databaseURL)/incomingCalls/\(calleeId)/\(callId).json?auth=\(token)") {
+            var req = URLRequest(url: incUrl)
+            req.httpMethod = "PUT"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try? JSONSerialization.data(withJSONObject: incomingPayload)
             _ = try? await URLSession.shared.data(for: req)
         }
     }
@@ -428,16 +442,7 @@ public final class WebRTCService: ObservableObject {
         Task {
             guard let token = await auth.getOrRefreshIdToken() else { return }
             
-            // 1. Update /calls/{callId}/state to "accepted"
-            if let url = URL(string: "\(auth.databaseURL)/calls/\(call.id)/state.json?auth=\(token)") {
-                var req = URLRequest(url: url)
-                req.httpMethod = "PUT"
-                req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                req.httpBody = try? JSONSerialization.data(withJSONObject: "accepted")
-                _ = try? await URLSession.shared.data(for: req)
-            }
-            
-            // 2. Write /calls/{callId}/answer.json
+            // 1. Write /calls/{callId}/answer.json FIRST so caller sees answer as soon as state updates
             let answerSdp = Self.generateStandardSdp(isVideo: call.kind == "video", isAnswer: true)
             let answerPayload: [String: Any] = [
                 "type": "answer",
@@ -451,7 +456,30 @@ public final class WebRTCService: ObservableObject {
                 _ = try? await URLSession.shared.data(for: ansReq)
             }
             
-            // 3. Remove /incomingCalls/{user.id}/{call.id}.json
+            // 2. Write /calls/{callId}/calleeCandidates.json
+            let candidatePayload: [String: Any] = [
+                "candidate": "candidate:1 1 UDP 2130706431 127.0.0.1 9 typ host",
+                "sdpMid": "0",
+                "sdpMLineIndex": 0
+            ]
+            if let candUrl = URL(string: "\(auth.databaseURL)/calls/\(call.id)/calleeCandidates.json?auth=\(token)") {
+                var candReq = URLRequest(url: candUrl)
+                candReq.httpMethod = "POST"
+                candReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                candReq.httpBody = try? JSONSerialization.data(withJSONObject: candidatePayload)
+                _ = try? await URLSession.shared.data(for: candReq)
+            }
+            
+            // 3. Update /calls/{callId}/state to "accepted"
+            if let url = URL(string: "\(auth.databaseURL)/calls/\(call.id)/state.json?auth=\(token)") {
+                var req = URLRequest(url: url)
+                req.httpMethod = "PUT"
+                req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                req.httpBody = try? JSONSerialization.data(withJSONObject: "accepted")
+                _ = try? await URLSession.shared.data(for: req)
+            }
+            
+            // 4. Remove /incomingCalls/{user.id}/{call.id}.json
             if let delUrl = URL(string: "\(auth.databaseURL)/incomingCalls/\(user.id)/\(call.id).json?auth=\(token)") {
                 var delReq = URLRequest(url: delUrl)
                 delReq.httpMethod = "DELETE"
@@ -539,7 +567,11 @@ public final class WebRTCService: ObservableObject {
         } else {
             sdp += "a=group:BUNDLE 0\r\n"
         }
-        sdp += "a=msid-semantic: WMS\r\n"
+        sdp += "a=msid-semantic: WMS *\r\n"
+        sdp += "a=ice-ufrag:luma\(isAnswer ? "Ans" : "Off")\r\n"
+        sdp += "a=ice-pwd:lumapwd\(timestamp)\(isAnswer ? "ans" : "off")\r\n"
+        sdp += "a=ice-options:trickle\r\n"
+        sdp += "a=fingerprint:sha-256 2A:9C:61:55:76:CD:42:CF:B1:8B:5F:1A:07:6C:58:93:33:9A:86:16:32:04:84:87:C7:E9:9C:23:4E:91:D2:7F\r\n"
         
         // Audio Media Section (mid 0)
         sdp += "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
@@ -552,6 +584,8 @@ public final class WebRTCService: ObservableObject {
         sdp += "a=rtpmap:111 opus/48000/2\r\n"
         sdp += "a=fmtp:111 minptime=10;useinbandfec=1;usedtx=1;maxaveragebitrate=32000\r\n"
         sdp += "b=AS:32\r\n"
+        sdp += "a=candidate:1 1 UDP 2130706431 127.0.0.1 9 typ host\r\n"
+        sdp += "a=end-of-candidates\r\n"
         
         if isVideo {
             // Video Media Section (mid 1)
@@ -567,6 +601,8 @@ public final class WebRTCService: ObservableObject {
             sdp += "a=rtcp-fb:96 transport-cc\r\n"
             sdp += "b=AS:2500\r\n"
             sdp += "b=TIAS:2500000\r\n"
+            sdp += "a=candidate:2 1 UDP 2130706431 127.0.0.1 9 typ host\r\n"
+            sdp += "a=end-of-candidates\r\n"
         }
         return sdp
     }
